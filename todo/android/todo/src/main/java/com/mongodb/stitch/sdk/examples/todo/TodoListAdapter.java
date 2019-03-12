@@ -7,45 +7,32 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
-import android.widget.CompoundButton;
 import android.widget.TextView;
 
-import com.google.android.gms.tasks.OnCompleteListener;
-import com.google.android.gms.tasks.Task;
-import com.mongodb.stitch.android.services.mongodb.MongoClient;
+import com.mongodb.stitch.android.services.mongodb.remote.RemoteMongoCollection;
 
+import org.bson.BsonValue;
 import org.bson.Document;
 import org.bson.types.ObjectId;
 
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 
 public class TodoListAdapter extends ArrayAdapter<TodoItem> {
 
-    private final MongoClient.Collection _itemSource;
-
-    // Store the expected state of the items based off the users intentions. This is to handle this
-    // series of events:
-    // Check Item Request Begin - Item in state X
-    // Refresh List - Item in state Y, View is refreshed
-    // Check Item Request End - Item in State X
-    // Refresh List - Item in state X, View is refreshed
-    //
-    // In this example app, these updates happen on the UI thread,
-    // so no synchronization is necessary.
-    private final Map<ObjectId, Boolean> _itemState;
+    private final RemoteMongoCollection _itemSource;
+    private List<BsonValue> pendingChanges;
 
     public TodoListAdapter(
             final Context context,
             final int resource,
             final List<TodoItem> items,
-            final MongoClient.Collection itemSource
+            final RemoteMongoCollection itemSource
     ) {
         super(context, resource, items);
         _itemSource = itemSource;
-        _itemState = new HashMap<>();
+        pendingChanges = new ArrayList<>();
     }
 
     @NonNull
@@ -70,37 +57,31 @@ public class TodoListAdapter extends ArrayAdapter<TodoItem> {
         ((TextView) row.findViewById(R.id.text)).setText(item.getText());
 
         final CheckBox checkBox = (CheckBox) row.findViewById(R.id.checkBox);
-        checkBox.setOnCheckedChangeListener(null);
+        checkBox.setChecked(item.getChecked());
 
-        if (_itemState.containsKey(item.getId())) {
-            checkBox.setChecked(_itemState.get(item.getId()));
-        } else {
-            checkBox.setChecked(item.getChecked());
-        }
+        checkBox.setOnCheckedChangeListener((compoundButton, b) -> {
+            final Document query = new Document();
+            query.put("_id", item.getId());
 
-        checkBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton compoundButton, boolean b) {
-                final Document query = new Document();
-                query.put("_id", item.getId());
+            final Document update = new Document();
+            final Document set = new Document();
+            set.put("checked", b);
+            update.put("$set", set);
 
-                final Document update = new Document();
-                final Document set = new Document();
-                set.put("checked", b);
-                update.put("$set", set);
-
-                _itemState.put(item.getId(), b);
-                _itemSource.updateOne(query, update).addOnCompleteListener(new OnCompleteListener<Void>() {
-                    @Override
-                    public void onComplete(@NonNull final Task<Void> task) {
-
-                        // Our intent may no longer be valid, so clear the state
-                        _itemState.remove(item.getId());
-                    }
-                });
-            }
+            _itemSource.sync().updateOne(query, update);
         });
-
         return row;
+    }
+
+    public void addToPending(BsonValue id){
+        this.pendingChanges.add(id);
+    }
+
+    public void removeFromPending(BsonValue id) {
+        this.pendingChanges.remove(id);
+    }
+
+    public boolean pendingContains(BsonValue id){
+        return this.pendingChanges.contains(id);
     }
 }
